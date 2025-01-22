@@ -7,6 +7,7 @@ from datetime import datetime
 from translations import translations  
 import threading
 from telegram.ext import Application
+import streamlit as st
 
 # Diccionario para almacenar las respuestas del usuario y datos de interacción
 user_data = {}
@@ -303,11 +304,15 @@ def run_bot():
     application.run_polling()
 
 
-if __name__ == "__main__":
-    # Ejecuta el bot en un hilo separado
+# Función principal
+def main():
+    # Ejecutar el bot en un hilo separado
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.start()
 
     # Aquí puedes continuar con tu código de Streamlit
-    import streamlit as st
     st.write("¡Hola desde Streamlit!")
+
+# Punto de entrada
+if __name__ == "__main__":
+    main()
