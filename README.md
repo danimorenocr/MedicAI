@@ -1,61 +1,128 @@
-Pre-Diagnostic medic in Telegram
 
-This is an interactive chatbot developed in Python, using the `python-telegram-bot` library to interact with users on Telegram. The bot specializes in collecting symptoms, providing preliminary diagnoses, and suggesting treatments, all while recording interactions in a Snowflake database.
+# Medical Pre-diagnosis Bot
+
+**PrediagnosisAI Bot** is an interactive chatbot that offers general health advice based on reported symptoms. Developed using Python and the `python-telegram-bot` library, this bot allows users to receive preliminary diagnoses and suggestions on whether to seek medical attention. It also stores user interactions in a Snowflake database for future improvements.
+
+[!IMPORTANT]
+You can find and interact with the bot on Telegram: [@PrediagnosisAI_bot](https://t.me/PrediagnosisAI_bot).
+
+---
 
 ## Requirements
 
-- Python 3.7 or higher
-- Necessary libraries:
-  - `python-telegram-bot`
-  - `snowflake-connector-python`
-  - `json`
-  - `asyncio`
-  - `datetime`
-  - `translations` (local file with translations)
+Ensure that your environment has the following:
 
-Install the required libraries using `pip`:
+- Python 3.7 or higher
+- Required libraries:
+  - `streamlit`
+  - `pandas`
+  - `python-telegram-bot==21.10`
+  - `snowflake-connector-python`
+  - `translations`
+  - `python-dotenv`
+
+To install the necessary libraries, run:
 
 ```bash
-pip install python-telegram-bot snowflake-connector-python
+pip install -r requirements.txt
 ```
 
-Snowflake Configuration
-The bot connects to a Snowflake database to store interaction data with users. Ensure that you have the necessary credentials (username, password, account, warehouse, database, and schema). These credentials are configured in the code of the `save_interaction_data` and `get_diagnosis` functions.
+---
 
-Features
-Login and language selection
-The bot allows users to start a conversation using the `/start` command and select their preferred language (Spanish or English).
-Symptom registration
-The bot guides the user through a series of questions to gather information about their symptoms. The symptoms are stored and used to generate a preliminary diagnosis.
-Diagnosis
-Based on the symptoms reported by the user, the bot queries a diagnostic model (using Snowflake) and provides recommendations on preliminary diagnoses, home treatments, and when to seek medical attention.
-User satisfaction
-At the end of the session, the bot asks the user if they are satisfied with the experience and stores this information in the database.
-Inactivity
-If the user remains inactive for more than 30 minutes, the bot will delete their session data.
+## Snowflake Configuration
 
-Project files and structure
+This bot connects to a **Snowflake** database to store user interaction data. You’ll need to configure the following credentials:
 
+- Username
+- Password
+- Account
+- Warehouse
+- Database
+- Schema
+
+These credentials are used in the `save_interaction_data` and `get_diagnosis` functions within the code.
+
+[!IMPORTANT]
+CREATE THE TABLES
+
+CREATE TABLE bot_interactions (
+    interaction_id BIGINT AUTOINCREMENT PRIMARY KEY,
+    user_id STRING,
+    chat_id STRING,
+    interaction_start TIMESTAMP,
+    interaction_end TIMESTAMP,
+    symptoms_reported STRING,
+    diagnosis_provided STRING,
+    confirmation_status STRING, -- Valores posibles: 'Correcto', 'Incorrecto'
+    satisfaction_status STRING, -- Valores posibles: 'Satisfecho', 'No Satisfecho'
+    messages_exchanged INT,
+    session_duration_seconds INT,
+    inactivity_flag BOOLEAN,
+    error_details STRING,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+---
+
+## Features
+
+- **Login and Language Selection**  
+  Start the bot by using the `/start` command and select your preferred language (Spanish or English).
+  
+- **Symptom Registration**  
+  The bot asks the user to report their symptoms through a guided conversation. The information is collected and stored for diagnostic purposes.
+  
+- **Preliminary Diagnosis**  
+  Based on the reported symptoms, the bot queries a diagnostic model in Snowflake to generate preliminary diagnoses, home remedies, and advice on when to seek professional medical care.
+  
+- **User Satisfaction Survey**  
+  At the end of each session, the bot asks users if they are satisfied with the experience, and this feedback is stored in the database.
+  
+- **Inactivity Timeout**  
+  If the user remains inactive for more than 30 minutes, the bot deletes the session data automatically.
+
+---
+
+## Project File Structure
+
+```
 /chatbot
-├── bot.py                # Main bot code
-├── translations.py       # Translations for different languages
-└── requirements.txt      # File for Python dependencies
+├── chatbot.py            # Main bot code
+├── translations.py       # Translation files for different languages
+└── requirements.txt      # Python dependencies file
+└── streamlit.py          # Data Visualization
+```
 
-Usage
-Start the bot on Telegram by sending the `/start` command.
-Select your preferred language (Spanish or English).
-The bot will guide you to report your symptoms.
-After submitting the symptoms, the bot will provide a preliminary diagnosis and suggestions.
-Finally, the bot will ask you if you are satisfied with the experience.
-Contributing
-Fork the repository.
-Create a new branch (git checkout -b new-feature).
-Make your changes.
-Commit your changes (git commit -am 'Add new functionality').
-Push to your branch (git push origin new-feature).
-Create a new Pull Request.
+---
 
-License
-This project is licensed under the MIT License - see the LICENSE file for details.
+## Usage
 
-Daniela Moreno 
+1. **Start the bot** on Telegram by sending the `/start` command.
+2. **Select a language** (Spanish or English).
+3. **Report your symptoms** by following the bot's instructions.
+4. **Receive a preliminary diagnosis** along with advice on home treatments and when to seek medical attention.
+5. **Provide feedback** on your experience at the end of the session.
+
+---
+
+## Contributing
+
+We welcome contributions to improve this project! If you'd like to contribute:
+
+1. Fork the repository.
+2. Create a new branch (`git checkout -b new-feature`).
+3. Make your changes.
+4. Commit your changes (`git commit -am 'Add new functionality'`).
+5. Push to your branch (`git push origin new-feature`).
+6. Create a new Pull Request.
+
+---
+
+## License
+
+This project is licensed under the **MIT License**. See the LICENSE file for details.
+
+---
+
+### Author
+Daniela Moreno
