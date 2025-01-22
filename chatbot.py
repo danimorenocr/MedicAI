@@ -61,12 +61,12 @@ def save_interaction_data(data):
 def get_diagnosis(sintomas, idioma):
     try:
         conn = snowflake.connector.connect(
-            user='DANIMORENOCR',
-            password='@DANIjuli0110',
-            account='wbkzjad-meb03147',
-            warehouse='chatbot_wh',
-            database='prueba',
-            schema='PUBLIC'
+            user=os.getenv('SNOWFLAKE_USER'),
+            password=os.getenv('SNOWFLAKE_PASSWORD'),
+            account=os.getenv('SNOWFLAKE_ACCOUNT'),
+            warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
+            database=os.getenv('SNOWFLAKE_DATABASE'),
+            schema=os.getenv('SNOWFLAKE_SCHEMA')
         )
         cursor = conn.cursor()
 
