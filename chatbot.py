@@ -285,8 +285,12 @@ async def handle_satisfaction(update: Update, context):
         print(f"Error al manejar la satisfacción del usuario: {str(e)}")
         await query.message.reply_text(obtener_respuesta('es', 'error_satisfaccion'))
 
-# Crear y añadir manejadores de comandos
+# Función para ejecutar el bot
 def run_bot():
+    # Crear un bucle de eventos de asyncio en este hilo
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     application = Application.builder().token("7572018407:AAGfi5W4x7ytTK2Rlp5iFH8dcMWlqMYTduI").build()
 
     # Añadir los manejadores
