@@ -44,7 +44,7 @@ These credentials are used in the `save_interaction_data` and `get_diagnosis` fu
 
 [!IMPORTANT]
 CREATE THE TABLES
-
+```
 CREATE TABLE bot_interactions (
     interaction_id BIGINT AUTOINCREMENT PRIMARY KEY,
     user_id STRING,
@@ -61,7 +61,7 @@ CREATE TABLE bot_interactions (
     error_details STRING,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
+```
 ---
 
 ## Features
