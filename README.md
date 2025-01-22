@@ -1,4 +1,4 @@
-Médico in Telegram
+Pre-Diagnostic medic in Telegram
 
 This is an interactive chatbot developed in Python, using the `python-telegram-bot` library to interact with users on Telegram. The bot specializes in collecting symptoms, providing preliminary diagnoses, and suggesting treatments, all while recording interactions in a Snowflake database.
 
