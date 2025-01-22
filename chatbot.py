@@ -4,10 +4,7 @@ import snowflake.connector
 import json
 import asyncio
 from datetime import datetime
-from translations import translations  
-import threading
-from telegram.ext import Application
-import streamlit as st
+from translations import translations  # Importar las traducciones
 
 # Diccionario para almacenar las respuestas del usuario y datos de interacción
 user_data = {}
@@ -20,15 +17,20 @@ def obtener_respuesta(idioma, clave, **kwargs):
     else:
         return "Sorry, I can't detect your language."
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Carga las variables del archivo .env
+
 def save_interaction_data(data):
     try:
         conn = snowflake.connector.connect(
-            user='DANIMORENOCR',
-            password='@DANIjuli0110',
-            account='wbkzjad-meb03147',
-            warehouse='chatbot_wh',
-            database='prueba',
-            schema='PUBLIC'
+            user=os.getenv('SNOWFLAKE_USER'),
+            password=os.getenv('SNOWFLAKE_PASSWORD'),
+            account=os.getenv('SNOWFLAKE_ACCOUNT'),
+            warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
+            database=os.getenv('SNOWFLAKE_DATABASE'),
+            schema=os.getenv('SNOWFLAKE_SCHEMA')
         )
         cursor = conn.cursor()
         
@@ -286,30 +288,19 @@ async def handle_satisfaction(update: Update, context):
         print(f"Error al manejar la satisfacción del usuario: {str(e)}")
         await query.message.reply_text(obtener_respuesta('es', 'error_satisfaccion'))
 
-# Función para ejecutar el bot
-async def run_bot():
-    application = Application.builder().token("7572018407:AAGfi5W4x7ytTK2Rlp5iFH8dcMWlqMYTduI").build()
+# Crear y añadir manejadores de comandos
+def main():
+    token=os.getenv('TELEGRAM_TOKEN')
+    application = Application.builder().token(token).build()
 
-    # Añadir los manejadores
+    # Comandos y mensajes
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(set_language, pattern='^(lang_es|lang_en)$'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^(confirm_yes|confirm_no)$'))
     application.add_handler(CallbackQueryHandler(handle_satisfaction, pattern='^(satisfied_yes|satisfied_no)$'))
 
-    # Usar asyncio.run() en el hilo secundario sin conflicto con el hilo principal
-    await application.run_polling()
+    application.run_polling()
 
-
-# Función principal
-def main():
-    # Ejecutar el bot en un hilo separado
-    bot_thread = threading.Thread(target=asyncio.run, args=(run_bot(),))
-    bot_thread.start()
-
-    # Aquí puedes continuar con tu código de Streamlit
-    st.write("¡Hola desde Streamlit!")
-
-# Punto de entrada
 if __name__ == "__main__":
     main()
