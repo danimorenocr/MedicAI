@@ -5,6 +5,8 @@ import json
 import asyncio
 from datetime import datetime
 from translations import translations  
+import threading
+from telegram.ext import Application
 
 # Diccionario para almacenar las respuestas del usuario y datos de interacción
 user_data = {}
@@ -284,10 +286,10 @@ async def handle_satisfaction(update: Update, context):
         await query.message.reply_text(obtener_respuesta('es', 'error_satisfaccion'))
 
 # Crear y añadir manejadores de comandos
-def main():
+def run_bot():
     application = Application.builder().token("7572018407:AAGfi5W4x7ytTK2Rlp5iFH8dcMWlqMYTduI").build()
 
-    # Comandos y mensajes
+    # Añadir los manejadores
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(set_language, pattern='^(lang_es|lang_en)$'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -296,5 +298,12 @@ def main():
 
     application.run_polling()
 
+
 if __name__ == "__main__":
-    main()
+    # Ejecuta el bot en un hilo separado
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.start()
+
+    # Aquí puedes continuar con tu código de Streamlit
+    import streamlit as st
+    st.write("¡Hola desde Streamlit!")
