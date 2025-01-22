@@ -287,11 +287,7 @@ async def handle_satisfaction(update: Update, context):
         await query.message.reply_text(obtener_respuesta('es', 'error_satisfaccion'))
 
 # Función para ejecutar el bot
-def run_bot():
-    # Crear un bucle de eventos de asyncio en este hilo
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
+async def run_bot():
     application = Application.builder().token("7572018407:AAGfi5W4x7ytTK2Rlp5iFH8dcMWlqMYTduI").build()
 
     # Añadir los manejadores
@@ -301,13 +297,14 @@ def run_bot():
     application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^(confirm_yes|confirm_no)$'))
     application.add_handler(CallbackQueryHandler(handle_satisfaction, pattern='^(satisfied_yes|satisfied_no)$'))
 
-    application.run_polling()
+    # Usar asyncio.run() en el hilo secundario sin conflicto con el hilo principal
+    await application.run_polling()
 
 
 # Función principal
 def main():
     # Ejecutar el bot en un hilo separado
-    bot_thread = threading.Thread(target=run_bot)
+    bot_thread = threading.Thread(target=asyncio.run, args=(run_bot(),))
     bot_thread.start()
 
     # Aquí puedes continuar con tu código de Streamlit
