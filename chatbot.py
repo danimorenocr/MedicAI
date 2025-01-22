@@ -4,7 +4,7 @@ import snowflake.connector
 import json
 import asyncio
 from datetime import datetime
-from translations import translations  # Importar las traducciones
+from translations import translations  
 
 # Diccionario para almacenar las respuestas del usuario y datos de interacción
 user_data = {}
