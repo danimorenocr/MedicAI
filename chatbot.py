@@ -302,9 +302,8 @@ def main():
 
     # Configurar el webhook
     port = int(os.getenv('PORT', '8443'))  # Render asigna un puerto automáticamente
-    webhook_base_url = os.getenv('WEBHOOK_URL')  # Carga la base del webhook
-    webhook_url = f"{webhook_base_url}/{token}"  # Completa la URL del 
-    
+    webhook_url = f"https://<https://medicai-k8oe.onrender.com>/{token}"  # Reemplaza con tu dominio Render
+
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
