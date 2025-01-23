@@ -290,17 +290,27 @@ async def handle_satisfaction(update: Update, context):
 
 # Crear y añadir manejadores de comandos
 def main():
-    token=os.getenv('TELEGRAM_TOKEN')
-    application = Application.builder().token(token).build()
+    token = os.getenv('TELEGRAM_TOKEN')
+    app = Application.builder().token(token).build()
 
-    # Comandos y mensajes
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(set_language, pattern='^(lang_es|lang_en)$'))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^(confirm_yes|confirm_no)$'))
-    application.add_handler(CallbackQueryHandler(handle_satisfaction, pattern='^(satisfied_yes|satisfied_no)$'))
+    # Añadir manejadores
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(set_language, pattern='^(lang_es|lang_en)$'))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^(confirm_yes|confirm_no)$'))
+    app.add_handler(CallbackQueryHandler(handle_satisfaction, pattern='^(satisfied_yes|satisfied_no)$'))
 
-    application.run_polling()
+    # Configurar el webhook
+    port = int(os.getenv('PORT', '8443'))  # Render asigna un puerto automáticamente
+    webhook_base_url = os.getenv('WEBHOOK_URL')  # Carga la base del webhook
+    webhook_url = f"{webhook_base_url}/{token}"  # Completa la URL del 
+    
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=token,
+        webhook_url=webhook_url
+    )
 
 if __name__ == "__main__":
     main()
