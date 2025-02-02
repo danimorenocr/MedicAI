@@ -5,6 +5,10 @@ import json
 import asyncio
 from datetime import datetime
 from translations import translations  # Importar las traducciones
+from dotenv import load_dotenv
+import os
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import CallbackQueryHandler
 
 # Diccionario para almacenar las respuestas del usuario y datos de interacción
 user_data = {}
@@ -17,8 +21,7 @@ def obtener_respuesta(idioma, clave, **kwargs):
     else:
         return "Sorry, I can't detect your language."
 
-from dotenv import load_dotenv
-import os
+
 
 load_dotenv()  # Carga las variables del archivo .env
 
@@ -70,9 +73,9 @@ def get_diagnosis(sintomas, idioma):
         )
         cursor = conn.cursor()
 
-        prompt = f"El usuario reporta los siguientes síntomas: {sintomas}. Devuelve: 1. Posibles diagnósticos preliminares. 2. Tratamientos caseros. 3. Cuándo debe buscar atención médica."
+        prompt = f"El usuario reporta los siguientes síntomas: {sintomas}. Devuelve: 1. Posibles diagnósticos preliminares. 2. Tratamientos caseros. 3. Cuándo debe buscar atención médica. LO NECESITO EN TEXO PLANO"
         if idioma == 'en':
-            prompt = f"The user reports the following symptoms: {sintomas}. Return: 1. Possible preliminary diagnoses. 2. Home treatments. 3. When to seek medical attention."
+            prompt = f"The user reports the following symptoms: {sintomas}. Return: 1. Possible preliminary diagnoses. 2. Home treatments. 3. When to seek medical attention. I need in plain text."
         print(prompt)
         messages = [{"role": "user", "content": prompt}]
         messages_json = json.dumps(messages)
@@ -208,6 +211,7 @@ async def handle_message(update: Update, context):
                 [InlineKeyboardButton(obtener_respuesta(idioma, 'confirm_no'), callback_data="confirm_no")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
+            print(reply_markup)
 
             # Enviar mensaje con formato HTML
             await update.message.reply_text(
@@ -215,6 +219,7 @@ async def handle_message(update: Update, context):
                 reply_markup=reply_markup,
                 parse_mode="HTML"
             )
+            
     except Exception as e:
         print(f"Error al manejar el mensaje del usuario: {str(e)}")
         await update.message.reply_text(obtener_respuesta('es', 'error_mensaje'))
@@ -223,6 +228,7 @@ async def handle_confirmation(update: Update, context):
     try:
         query = update.callback_query
         user_id = query.from_user.id
+        user_choice = query.data  # Esto contendrá 'confirm_yes' o 'confirm_no'
 
         # Verificar si 'start_time' está presente antes de acceder a él
         if user_id not in user_data or 'start_time' not in user_data[user_id]:
@@ -231,6 +237,14 @@ async def handle_confirmation(update: Update, context):
 
         idioma = user_data[user_id]['idioma']
         sintomas_info = user_data[user_id].get('sintomas_info', {})
+
+        # Imprimir la elección del usuario en la consola
+        if user_choice == "confirm_no":
+            print(f"Usuario {user_id} eligió NO")
+            await query.message.reply_text("Vamos a reiniciar el formulario. Presiona /start para reiniciar.")
+            # Redirigir a handle_message para reiniciar el formulario
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="/start")
+            return
 
         # Calcular la duración de la sesión
         start_time = user_data[user_id]['start_time']
@@ -247,11 +261,11 @@ async def handle_confirmation(update: Update, context):
 
         # Agregar el diagnóstico al final
         diagnostico = get_diagnosis(json.dumps(sintomas_info), idioma)
+        print(f"Diagnóstico: {diagnostico}")
         interaction_data[user_id]['diagnosis_provided'] = diagnostico
 
         # Enviar el diagnóstico al usuario
         await query.message.reply_text(obtener_respuesta(idioma, 'diagnostico', diagnostico=diagnostico))
-
 
         # Preguntar si está satisfecho
         keyboard = [
@@ -270,12 +284,14 @@ async def handle_satisfaction(update: Update, context):
         query = update.callback_query
         user_id = query.from_user.id
 
+        idioma = user_data[user_id]['idioma']
+
         if query.data == "satisfied_yes":
             interaction_data[user_id]['satisfaction_status'] = "Sí"
-            await query.message.reply_text(obtener_respuesta('es', 'gracias'))
+            await query.message.reply_text(obtener_respuesta(idioma, 'gracias'))
         elif query.data == "satisfied_no":
             interaction_data[user_id]['satisfaction_status'] = "No"
-            await query.message.reply_text(obtener_respuesta('es', 'disculpa'))
+            await query.message.reply_text(obtener_respuesta(idioma, 'disculpa'))
 
         # Llamar a la función para guardar los datos al final de la interacción
         save_interaction_data(interaction_data[user_id])
@@ -286,30 +302,24 @@ async def handle_satisfaction(update: Update, context):
         interaction_data.pop(user_id, None)
     except Exception as e:
         print(f"Error al manejar la satisfacción del usuario: {str(e)}")
-        await query.message.reply_text(obtener_respuesta('es', 'error_satisfaccion'))
+        await query.message.reply_text(obtener_respuesta(idioma, 'error_satisfaccion'))
 
-# Crear y añadir manejadores de comandos
 def main():
     token = os.getenv('TELEGRAM_TOKEN')
     app = Application.builder().token(token).build()
 
-    # Añadir manejadores
+    print("Bot iniciado. Presiona Ctrl+C para detenerlo.")
+
+# Añadir manejadores
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(set_language, pattern='^(lang_es|lang_en)$'))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^(confirm_yes|confirm_no)$'))
     app.add_handler(CallbackQueryHandler(handle_satisfaction, pattern='^(satisfied_yes|satisfied_no)$'))
 
-    # Configurar el webhook
-    port = int(os.getenv('PORT', '8443'))  # Render asigna un puerto automáticamente
-    webhook_url = f"https://medicai-k8oe.onrender.com/{token}"  # Reemplaza con tu dominio Render
-    print(webhook_url)
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=token,
-        webhook_url=webhook_url
-    )
+
+        # Iniciar el bot con polling en lugar de webhook
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

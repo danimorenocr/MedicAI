@@ -1,16 +1,21 @@
-import pandas as pd 
+import pandas as pd
 import streamlit as st
-from datetime import datetime
+import plotly.express as px
 import snowflake.connector
+from dotenv import load_dotenv
+import os
+
+
+load_dotenv()  # Carga las variables del archivo .env
 
 def fetch_data_from_snowflake(query):
     conn = snowflake.connector.connect(
-        user='DANIMORENOCR',
-        password='@DANIjuli0110',
-        account='wbkzjad-meb03147',
-        warehouse='chatbot_wh',
-        database='prueba',
-        schema='PUBLIC'
+        user=os.getenv('SNOWFLAKE_USER'),
+        password=os.getenv('SNOWFLAKE_PASSWORD'),
+        account=os.getenv('SNOWFLAKE_ACCOUNT'),
+        warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
+        database=os.getenv('SNOWFLAKE_DATABASE'),
+        schema=os.getenv('SNOWFLAKE_SCHEMA')
     )
     cursor = conn.cursor()
     cursor.execute(query)
@@ -21,101 +26,110 @@ def fetch_data_from_snowflake(query):
     conn.close()
     return df
 
-# Configurar título
-st.title("Análisis de Interacciones del Chatbot")
+# Función para truncar cadenas largas
+def truncate_columns(df, max_length=30):
+    for col in df.columns:
+        if df[col].dtype == 'object':  # Solo truncamos columnas de texto
+            df[col] = df[col].apply(lambda x: x[:max_length] if isinstance(x, str) else x)
+    return df
 
-# Consultar datos
-query = "SELECT * FROM bot_interactions;"
+st.set_page_config(layout="wide")
+st.markdown(""" 
+    <style>
+        body {
+            background-color: #121212;
+            color: white;
+        }
+        .card {
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 4px 4px 12px rgba(255, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+        .metric-container {
+            display: flex;
+            justify-content: space-around;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("\U0001F916 Análisis de Interacciones del Chatbot")
+
+# Filtrar por un rango de fechas
+query = """
+    SELECT user_id, interaction_start, interaction_end, symptoms_reported, 
+           diagnosis_provided, session_duration_seconds 
+    FROM bot_interactions
+    WHERE interaction_start BETWEEN '2025-01-01' AND '2025-01-31';
+"""
+
 data = fetch_data_from_snowflake(query)
 
-# Mostrar los datos en una tabla
-st.header("Datos Recuperados")
-st.dataframe(data)
+# Reemplazar valores nulos con 'N/R'
+data = data.fillna("N/R")
 
-# Análisis básico
-st.header("Análisis Básico")
+# Truncar las columnas que tienen texto
+data = truncate_columns(data, max_length=30)
 
-# 1. Contar el total de interacciones
-total_interactions = len(data)
-st.metric("Total de Interacciones", total_interactions)
+col1, col2 = st.columns([2, 1])
 
-# 2. Diagnósticos proporcionados
-diagnostics_count = data['DIAGNOSIS_PROVIDED'].value_counts()
-st.subheader("Diagnósticos Proporcionados")
-st.bar_chart(diagnostics_count)
+with col1:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.header("\U0001F4C8 Datos Recuperados")
+    st.dataframe(data)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# 3. Tiempos promedio de interacción
-if 'SESSION_DURATION_SECONDS' in data.columns:
-    avg_session_duration = data['SESSION_DURATION_SECONDS'].mean()
-    st.metric("Duración Promedio de las Sesiones (segundos)", round(avg_session_duration, 2))
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.header("\U0001F5C3 Diagnósticos Proporcionados")
+    if 'DIAGNOSIS_PROVIDED' in data.columns:
+        fig = px.bar(data['DIAGNOSIS_PROVIDED'].value_counts(),
+                     color_discrete_sequence=['#E0115F'])
+        st.plotly_chart(fig, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# 4. Filtro de fecha
-st.header("Filtrar por Fecha")
-date_filter = st.date_input("Selecciona una fecha", datetime.now().date())
-filtered_data = data[pd.to_datetime(data['INTERACTION_START']).dt.date == date_filter]
-st.dataframe(filtered_data)
 
-# 5. Análisis de satisfacción
-if 'SATISFACTION_STATUS' in data.columns:
-    satisfaction_counts = data['SATISFACTION_STATUS'].value_counts()
-    st.subheader("Estado de Satisfacción")
-    st.bar_chart(satisfaction_counts)
-
-# 6. Análisis de síntomas reportados
-st.header("Análisis de Síntomas Reportados")
-symptoms_count = data['SYMPTOMS_REPORTED'].value_counts().head(10)  # top 10 síntomas
-st.bar_chart(symptoms_count)
-
-# 7. Tiempo promedio de respuesta
-if 'SESSION_DURATION_SECONDS' in data.columns:
-    # Validar que no haya valores negativos en SESSION_DURATION_SECONDS
-    invalid_durations = data[data['SESSION_DURATION_SECONDS'] < 0]
-    valid_durations = data[data['SESSION_DURATION_SECONDS'] >= 0]
+with col2:
+    st.markdown("<div class='card metric-container'>", unsafe_allow_html=True)
+    st.metric("Total de Interacciones", len(data))
+    st.markdown("</div>", unsafe_allow_html=True)
     
-    # Mostrar advertencia si se encuentran valores negativos
-    if not invalid_durations.empty:
-        st.warning(f"Se encontraron {len(invalid_durations)} registros con duraciones negativas en 'SESSION_DURATION_SECONDS'. Estos serán excluidos del cálculo.")
-    
-    # Calcular el tiempo promedio de respuesta
-    avg_session_duration = valid_durations['SESSION_DURATION_SECONDS'].mean()
-    st.metric("Tiempo Promedio de Respuesta (segundos)", round(avg_session_duration, 2))
-else:
-    st.error("La columna 'SESSION_DURATION_SECONDS' no está disponible en los datos.")
+    if 'SESSION_DURATION_SECONDS' in data.columns:
+        avg_session_duration = data['SESSION_DURATION_SECONDS'].mean()
+        st.markdown("<div class='card metric-container'>", unsafe_allow_html=True)
+        st.metric("Duración Promedio de la Sesión (segundos)", round(avg_session_duration, 2))
+        st.markdown("</div>", unsafe_allow_html=True)
 
-# 8. Análisis de interacciones con errores
-st.header("Análisis de Interacciones con Errores")
-error_interactions = data[data['ERROR_DETAILS'].notna()]
-st.metric("Interacciones con Errores", len(error_interactions))
-st.dataframe(error_interactions[['INTERACTION_ID', 'ERROR_DETAILS']])
+st.markdown("<div class='card'>", unsafe_allow_html=True)
+st.header("\U0001F9A0 Análisis de Síntomas Reportados")
+if 'SYMPTOMS_REPORTED' in data.columns:
+    fig = px.bar(data['SYMPTOMS_REPORTED'].value_counts().head(10),
+                 color_discrete_sequence=['#E0115F'])
+    st.plotly_chart(fig, use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
-# 9. Análisis de la actividad de usuarios (Inactividad)
-st.header("Análisis de Inactividad de Usuarios")
-inactive_users = data[data['INACTIVITY_FLAG'] == 1]
-st.metric("Interacciones con Inactividad", len(inactive_users))
+st.markdown("<div class='card'>", unsafe_allow_html=True)
+st.header("\U0001F464 Frecuencia de Interacciones por Usuario")
+if 'USER_ID' in data.columns:
+    fig = px.bar(data['USER_ID'].value_counts().head(10),
+                 color_discrete_sequence=['#E0115F'])
+    st.plotly_chart(fig, use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
-# 10. Frecuencia de interacciones por usuario
-st.header("Frecuencia de Interacciones por Usuario")
-user_interactions = data['USER_ID'].value_counts()
-st.bar_chart(user_interactions.head(10))  # top 10 usuarios con más interacciones
+# Filtro por fecha de interacción
+st.markdown("<div class='card'>", unsafe_allow_html=True)
+st.header("\U0001F4C5 Buscar Interacción por Fecha")
 
-# 11. Análisis de diagnósticos proporcionados según el tiempo de la sesión
-st.header("Diagnósticos Proporcionados por Duración de la Sesión")
-data['session_duration_minutes'] = data['SESSION_DURATION_SECONDS'] / 60
-diagnosis_by_duration = data.groupby('session_duration_minutes')['DIAGNOSIS_PROVIDED'].value_counts().unstack()
-st.bar_chart(diagnosis_by_duration)
+# Selector de fecha
+interaction_date = st.date_input("Selecciona la fecha de la interacción", min_value=pd.to_datetime('2025-01-01'), max_value=pd.to_datetime('2025-01-31'))
 
-# 12. Relación entre el diagnóstico y la satisfacción
-st.header("Relación entre Diagnóstico y Satisfacción")
-diagnosis_satisfaction = data.groupby(['DIAGNOSIS_PROVIDED', 'SATISFACTION_STATUS']).size().unstack()
-st.bar_chart(diagnosis_satisfaction)
-
-# 13. Análisis de los mensajes intercambiados
-st.header("Análisis de Mensajes Intercambiados")
-messages_count = data['MESSAGES_EXCHANGED'].value_counts().head(10)
-st.bar_chart(messages_count)
-
-# 14. Análisis de interacciones según el estado de confirmación
-st.header("Análisis de Confirmación de Estado")
-confirmation_status_count = data['CONFIRMATION_STATUS'].value_counts()
-st.bar_chart(confirmation_status_count)
-
+if interaction_date:
+    query_date = f"""
+    SELECT user_id, interaction_start, interaction_end, symptoms_reported, 
+           diagnosis_provided, session_duration_seconds 
+    FROM bot_interactions
+    WHERE interaction_start::DATE = '{interaction_date}';
+    """
+    filtered_data = fetch_data_from_snowflake(query_date)
+    st.dataframe(filtered_data)
+st.markdown("</div>", unsafe_allow_html=True)

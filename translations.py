@@ -37,7 +37,7 @@ translations = {
         'error_inicio': "An error occurred while starting the conversation. Please try again.",
         'inactividad': "We haven't received a response in 30 minutes. The conversation has been reset. Use /start to begin again.",
         'diagnostico': "Preliminary diagnosis: {diagnostico}",
-        'satisfaccion': "Are you satisfied with the responses?",
+        'satisfaccion': "Are you satisfied with the responses?😊😊",
         'gracias': "Thank you for using Medic AI. 🩺😷 Take care! 😁",
         'disculpa': "😞We are sorry for not meeting your expectations. Please try again or consult a doctor.",
         'error_mensaje': "An error occurred while processing your message. Please try again.",
