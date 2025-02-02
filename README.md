@@ -5,6 +5,7 @@
 
 [!IMPORTANT]
 You can find and interact with the bot on Telegram: [@PrediagnosisAI_bot](https://t.me/PrediagnosisAI_bot).
+Botdata: https://medicai-oeeczwkzpw623bofysnsp4.streamlit.app/
 
 ---
 
