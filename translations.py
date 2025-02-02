@@ -49,7 +49,7 @@ translations = {
         'pregunta_sintomas_4': "4️⃣ Have you noticed any recent changes in your symptoms? (improved, worsened, changed in nature)",
         'pregunta_sintomas_5': "5️⃣ Is there any other relevant information, such as recent falls or incidents?",
         'pregunta_sintomas_6': "6️⃣ Do you have any significant medical history or illness?",
-        'confirmacion_sintomas': "This is the information you have provided:\n\n{sintomas_text}\n\n_Is it correct?_",
+        'confirmacion_sintomas': "This is the information you have provided:\n\n{sintomas_text}\n\nIs it correct?",
         'confirm_yes': "Yes, it is correct",
         'confirm_no': "No, there are errors",
         'descripcion_sintomas': "Description of symptoms",
