@@ -63,6 +63,13 @@ def save_interaction_data(data):
 # Conexión con Snowflake
 def get_diagnosis(sintomas, idioma):
     try:
+        # Verificar si sintomas es un diccionario/objeto JSON
+        if isinstance(sintomas, dict):
+            sintomas_texto = ""
+            for clave, valor in sintomas.items():
+                sintomas_texto += f"{clave}: {valor}, "
+            sintomas = sintomas_texto.rstrip(", ")  # Eliminar la última coma y espacio
+        
         conn = snowflake.connector.connect(
             user=os.getenv('SNOWFLAKE_USER'),
             password=os.getenv('SNOWFLAKE_PASSWORD'),
@@ -76,23 +83,41 @@ def get_diagnosis(sintomas, idioma):
         prompt = f"El usuario reporta los siguientes síntomas: {sintomas}. Devuelve: 1. Posibles diagnósticos preliminares. 2. Tratamientos caseros. 3. Cuándo debe buscar atención médica. LO NECESITO EN TEXO PLANO"
         if idioma == 'en':
             prompt = f"The user reports the following symptoms: {sintomas}. Return: 1. Possible preliminary diagnoses. 2. Home treatments. 3. When to seek medical attention. I need in plain text."
-        print(prompt)
-        messages = [{"role": "user", "content": prompt}]
-        messages_json = json.dumps(messages)
-        escaped_json = messages_json.replace('"', '\\"')
-
+        
+        print(f"Prompt enviado a Snowflake: {prompt}")
+        
+        # Usar exactamente el formato que el usuario indicó
         query = f"""
             SELECT SNOWFLAKE.CORTEX.COMPLETE(
                 'mistral-large2',
-                PARSE_JSON('{escaped_json}')
+                [{{'role':'user','content':'{prompt.replace("'", "''")}'}}],
+                {{ }}
             );
         """
+        
+        print(f"Query SQL: {query}")
         cursor.execute(query)
         result = cursor.fetchone()
         cursor.close()
         conn.close()
-        return result[0] if result else "No se encontró un diagnóstico para estos síntomas."
+        
+        # Procesar la respuesta para extraer solo el texto
+        if result and result[0]:
+            # La respuesta viene en formato JSON
+            try:
+                respuesta_json = json.loads(result[0])
+                # Extraer solo el mensaje de texto de la respuesta JSON
+                if "choices" in respuesta_json and respuesta_json["choices"] and "messages" in respuesta_json["choices"][0]:
+                    return respuesta_json["choices"][0]["messages"].strip()
+                else:
+                    return result[0]  # Devolver el resultado completo si no podemos extraer el mensaje
+            except json.JSONDecodeError:
+                # Si no es JSON válido, devolver el resultado tal cual
+                return result[0]
+        else:
+            return "No se encontró un diagnóstico para estos síntomas."
     except Exception as e:
+        print(f"Error completo en get_diagnosis: {str(e)}")
         return f"Error al obtener diagnóstico: {str(e)}"
 
 # Función para el comando /start o mensajes de saludo
@@ -175,29 +200,49 @@ async def handle_message(update: Update, context):
         interaction_data[user_id]['symptoms_reported'] = ", ".join(user_data[user_id]['sintomas'])
         print(f"[ACTUALIZADO] Usuario={user_id}, Síntomas={interaction_data[user_id]['symptoms_reported']}")
 
+        # Enviar la pregunta correspondiente según la cantidad de síntomas proporcionados
         if len(user_data[user_id]['sintomas']) == 1:
-            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_1'), parse_mode='Markdown')
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_1'), parse_mode='Markdown')  # ¿Desde cuándo comenzaron estos síntomas?
         elif len(user_data[user_id]['sintomas']) == 2:
-            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_2'), parse_mode='Markdown')
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_2'), parse_mode='Markdown')  # En escala de 1 a 10, ¿cómo calificarías tus síntomas?
         elif len(user_data[user_id]['sintomas']) == 3:
-            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_3'))
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_3'))  # ¿Con qué frecuencia ocurren tus síntomas?
         elif len(user_data[user_id]['sintomas']) == 4:
-            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_4'))
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_4'))  # ¿Has notado algún cambio reciente en tus síntomas?
         elif len(user_data[user_id]['sintomas']) == 5:
-            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_5'))
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_5'))  # ¿Hay algún otro dato relevante, como caídas o incidentes recientes?
         elif len(user_data[user_id]['sintomas']) == 6:
-            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_6'))
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_6'))  # ¿Tienes algún antecedente médico o enfermedad importante?
         elif len(user_data[user_id]['sintomas']) == 7:
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_7'))  # ¿Presenta alguna enfermedad crónica?
+        elif len(user_data[user_id]['sintomas']) == 8:
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_8'))  # Indique si es alérgico a algún medicamento o alimento.
+        elif len(user_data[user_id]['sintomas']) == 9:
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_9'))  # Indique su edad.
+        elif len(user_data[user_id]['sintomas']) == 10:
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_10'))  # Indique su sexo (masculino, femenino).
+        elif len(user_data[user_id]['sintomas']) == 11:
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_11'))  # Indique su peso (kg).
+        elif len(user_data[user_id]['sintomas']) == 12:
+            await update.message.reply_text(obtener_respuesta(idioma, 'pregunta_sintomas_12'))  # Indique su altura (cm).
+        elif len(user_data[user_id]['sintomas']) == 13:            
             # Crear información de síntomas
             sintomas_info = {
-                obtener_respuesta(idioma, 'descripcion_sintomas'): user_data[user_id]['sintomas'][0],
-                obtener_respuesta(idioma, 'duracion_sintomas'): user_data[user_id]['sintomas'][1],
-                obtener_respuesta(idioma, 'intensidad_sintomas'): user_data[user_id]['sintomas'][2],
-                obtener_respuesta(idioma, 'frecuencia_sintomas'): user_data[user_id]['sintomas'][3],
-                obtener_respuesta(idioma, 'cambios_sintomas'): user_data[user_id]['sintomas'][4],
-                obtener_respuesta(idioma, 'datos_relevantes'): user_data[user_id]['sintomas'][5],
-                obtener_respuesta(idioma, 'antecedentes_medicos'): user_data[user_id]['sintomas'][6]
-            }
+        obtener_respuesta(idioma, 'descripcion_sintomas'): user_data[user_id]['sintomas'][0],  # ¿Desde cuándo comenzaron estos síntomas?     
+        obtener_respuesta(idioma, 'duracion_sintomas'): user_data[user_id]['sintomas'][1],  # ¿Desde cuándo comenzaron estos síntomas?
+        obtener_respuesta(idioma, 'intensidad_sintomas'): user_data[user_id]['sintomas'][2],  # En escala de 1 a 10, ¿cómo calificarías tus síntomas?
+        obtener_respuesta(idioma, 'frecuencia_sintomas'): user_data[user_id]['sintomas'][3],  # ¿Con qué frecuencia ocurren tus síntomas?
+        obtener_respuesta(idioma, 'cambios_sintomas'): user_data[user_id]['sintomas'][4],  # ¿Has notado algún cambio reciente en tus síntomas?
+        obtener_respuesta(idioma, 'datos_relevantes'): user_data[user_id]['sintomas'][5],  # ¿Hay algún otro dato relevante, como caídas o incidentes recientes?
+        obtener_respuesta(idioma, 'antecedentes_medicos'): user_data[user_id]['sintomas'][6],  # ¿Tienes algún antecedente médico o enfermedad importante?
+        obtener_respuesta(idioma, 'enfermedades_cronicas'): user_data[user_id]['sintomas'][7],  # ¿Presenta alguna enfermedad crónica?
+        obtener_respuesta(idioma, 'alergias'): user_data[user_id]['sintomas'][8],  # Indique si es alérgico a algún medicamento o alimento.
+        obtener_respuesta(idioma, 'edad'): user_data[user_id]['sintomas'][9],  # Indique su edad.
+        obtener_respuesta(idioma, 'sexo'): user_data[user_id]['sintomas'][10],  # Indique su sexo (masculino, femenino).
+        obtener_respuesta(idioma, 'peso'): user_data[user_id]['sintomas'][11],  # Indique su peso (kg).
+        obtener_respuesta(idioma, 'altura'): user_data[user_id]['sintomas'][12]  # Indique su altura (cm).
+    }
+
 
             # Crear texto formateado en HTML
             sintomas_text = "\n".join(
@@ -257,23 +302,96 @@ async def handle_confirmation(update: Update, context):
         print(f"[FIN] Usuario {user_id} - Duración de la sesión: {session_duration} segundos")
 
         # Informar al usuario que el diagnóstico está en proceso
-        await query.message.reply_text(obtener_respuesta(idioma, 'diagnostico_proceso'))
+        espera_msg = obtener_respuesta(idioma, 'diagnostico_proceso')
+        await query.message.reply_text(f"⏳ {espera_msg}")
+
+        # Convertir sintomas_info a formato de texto simple
+        sintomas_texto = ""
+        for clave, valor in sintomas_info.items():
+            sintomas_texto += f"{clave}: {valor}, "
+        sintomas_texto = sintomas_texto.rstrip(", ")  # Eliminar la última coma y espacio
 
         # Agregar el diagnóstico al final
-        diagnostico = get_diagnosis(json.dumps(sintomas_info), idioma)
+        diagnostico = get_diagnosis(sintomas_texto, idioma)
         print(f"Diagnóstico: {diagnostico}")
         interaction_data[user_id]['diagnosis_provided'] = diagnostico
 
-        # Enviar el diagnóstico al usuario
-        await query.message.reply_text(obtener_respuesta(idioma, 'diagnostico', diagnostico=diagnostico))
+        # Formatear la respuesta para Telegram
+        if idioma == 'es':
+            mensaje_diagnostico = "<b>🏥 RESULTADO DEL ANÁLISIS MÉDICO 🏥</b>\n\n"
+        else:
+            mensaje_diagnostico = "<b>🏥 MEDICAL ANALYSIS RESULT 🏥</b>\n\n"
+            
+        # Formatear la respuesta de la IA para que se vea bien en Telegram
+        lineas_diagnostico = diagnostico.split('\n')
+        diagnostico_formateado = ""
+        
+        for linea in lineas_diagnostico:
+            if "1." in linea or linea.startswith("1 "):
+                if idioma == 'es':
+                    diagnostico_formateado += "<b>🔍 DIAGNÓSTICOS POSIBLES:</b>\n"
+                else:
+                    diagnostico_formateado += "<b>🔍 POSSIBLE DIAGNOSES:</b>\n"
+                # Eliminar el "1." del principio si existe
+                if "1." in linea:
+                    linea = linea.split("1.", 1)[1].strip()
+                elif linea.startswith("1 "):
+                    linea = linea[2:].strip()
+                diagnostico_formateado += f"• {linea}\n"
+            elif "2." in linea or linea.startswith("2 "):
+                diagnostico_formateado += "\n"
+                if idioma == 'es':
+                    diagnostico_formateado += "<b>🏠 TRATAMIENTOS CASEROS:</b>\n"
+                else:
+                    diagnostico_formateado += "<b>🏠 HOME TREATMENTS:</b>\n"
+                # Eliminar el "2." del principio si existe
+                if "2." in linea:
+                    linea = linea.split("2.", 1)[1].strip()
+                elif linea.startswith("2 "):
+                    linea = linea[2:].strip()
+                diagnostico_formateado += f"• {linea}\n"
+            elif "3." in linea or linea.startswith("3 "):
+                diagnostico_formateado += "\n"
+                if idioma == 'es':
+                    diagnostico_formateado += "<b>🚨 CUÁNDO BUSCAR ATENCIÓN MÉDICA:</b>\n"
+                else:
+                    diagnostico_formateado += "<b>🚨 WHEN TO SEEK MEDICAL ATTENTION:</b>\n"
+                # Eliminar el "3." del principio si existe
+                if "3." in linea:
+                    linea = linea.split("3.", 1)[1].strip()
+                elif linea.startswith("3 "):
+                    linea = linea[2:].strip()
+                diagnostico_formateado += f"• {linea}\n"
+            else:
+                # Para otras líneas, verificamos si pertenecen a una sección y las formateamos con viñetas
+                if diagnostico_formateado and not linea.strip() == "":
+                    diagnostico_formateado += f"• {linea}\n"
+        
+        # Añadir disclaimer médico
+        if idioma == 'es':
+            disclaimer = "\n<i>⚠️ NOTA IMPORTANTE: Este análisis es sólo informativo y no reemplaza la consulta con un profesional médico. Siempre consulte a un médico para un diagnóstico oficial.</i>"
+        else:
+            disclaimer = "\n<i>⚠️ IMPORTANT NOTE: This analysis is for informational purposes only and does not replace consultation with a healthcare professional. Always consult a doctor for an official diagnosis.</i>"
+        
+        # Añadir separadores decorativos
+        separador = "\n🔸🔹🔸🔹🔸🔹🔸🔹🔸🔹🔸🔹🔸🔹🔸\n"
+        mensaje_final = mensaje_diagnostico + separador + diagnostico_formateado + separador + disclaimer
+        
+        # Enviar el diagnóstico al usuario con formato HTML
+        await query.message.reply_text(mensaje_final, parse_mode="HTML")
 
         # Preguntar si está satisfecho
+        if idioma == 'es':
+            pregunta_satisfaccion = "¿Te ha sido útil este diagnóstico? 🤔"
+        else:
+            pregunta_satisfaccion = "Was this diagnosis helpful? 🤔"
+            
         keyboard = [
-            [InlineKeyboardButton(obtener_respuesta(idioma, 'confirm_yes'), callback_data="satisfied_yes")],
-            [InlineKeyboardButton(obtener_respuesta(idioma, 'confirm_no'), callback_data="satisfied_no")]
+            [InlineKeyboardButton(f"✅ {obtener_respuesta(idioma, 'confirm_yes')}", callback_data="satisfied_yes")],
+            [InlineKeyboardButton(f"❌ {obtener_respuesta(idioma, 'confirm_no')}", callback_data="satisfied_no")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text(obtener_respuesta(idioma, 'satisfaccion'), reply_markup=reply_markup)
+        await query.message.reply_text(pregunta_satisfaccion, reply_markup=reply_markup)
     except Exception as e:
         print(f"Error al manejar la confirmación del usuario: {str(e)}")
         await query.message.reply_text(obtener_respuesta('es', 'error_confirmacion'))
