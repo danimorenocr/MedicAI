@@ -43,7 +43,8 @@ translations = {
         'satisfied_yes': "Sí",
         'satisfied_no': "No", 
         'buzon': "Ayudanos a mejorar, deja tu opinión aquí:",
-        'opinion': "¿Cómo calificarías el servicio?"
+        'opinion': "¿Cómo calificarías el servicio?",
+        'seleccionar_correccion': "Por favor, selecciona cuál respuesta deseas corregir:"
     },
     'en': {
         'bienvenida': "WELCOME TO MEDIC AI 🩺😷!",
@@ -83,6 +84,7 @@ translations = {
         'satisfied_yes': "Yes",
         'satisfied_no': "No", 
         'buzon': "Help us improve, leave your opinion here:",
-        'opinion': "How would you rate the service?"
+        'opinion': "How would you rate the service?",
+        'seleccionar_correccion': "Please select which answer you want to correct:"
     }
 }
