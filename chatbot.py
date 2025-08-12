@@ -1,19 +1,115 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import snowflake.connector
-import json
 import asyncio
 from datetime import datetime
 from translations import translations  # Importar las traducciones
 from dotenv import load_dotenv
 import os
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackQueryHandler
+from openai import OpenAI
+from supabase import create_client
+
+load_dotenv()  # Carga las variables del archivo .env
+
+# Configuración
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# Crear cliente
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+)
+
+# Probar conexión
+def probar_conexion():
+    try:
+        res = supabase.table("usuarios").select("*").limit(1).execute()
+        print("Conexión correcta ✅", res.data)
+    except Exception as e:
+        print("Error de conexión ❌", e)
+
+probar_conexion()
+
 
 # Diccionario para almacenar las respuestas del usuario y datos de interacción
 user_data = {}
-inactive_users = {}  # Para rastrear usuarios inactivos
 interaction_data = {}  # Para almacenar datos básicos de usuario
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+# Función para obtener o registrar un usuario
+def registrar_usuario(chat_id, nombre):
+    # Intentar buscar usuario
+    res = supabase.table("usuarios").select("id").eq("chat_id", chat_id).execute()
+    if res.data:
+        return res.data[0]["id"]
+    # Si no existe, crearlo
+    nuevo = supabase.table("usuarios").insert({
+        "chat_id": chat_id,
+        "nombre": nombre
+    }).execute()
+    return nuevo.data[0]["id"]
+
+# Función para verificar si el usuario tiene sesiones previas
+def verificar_sesiones_previas(usuario_id):
+    try:
+        # Buscar las últimas sesiones del usuario (máximo 3 para no sobrecargarlo)
+        res = supabase.table("sesiones").select("id").eq("usuario_id", usuario_id).order("fecha_inicio", desc=True).limit(3).execute()
+        return res.data if res.data else []
+    except Exception as e:
+        print(f"Error al verificar sesiones previas: {str(e)}")
+        return []
+
+# Función para obtener diagnósticos de una sesión
+def obtener_diagnostico_sesion(sesion_id):
+    try:
+        res = supabase.table("consultas").select("respuesta_bot").eq("sesion_id", sesion_id).eq("tipo_mensaje", "diagnostico").execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0]["respuesta_bot"]
+        return None
+    except Exception as e:
+        print(f"Error al obtener diagnóstico: {str(e)}")
+        return None
+
+# Función para obtener un resumen de los síntomas de una sesión
+def obtener_resumen_sintomas(sesion_id):
+    try:
+        # Obtener todos los mensajes de tipo síntoma
+        res = supabase.table("consultas").select("pregunta,respuesta_usuario").eq("sesion_id", sesion_id).eq("tipo_mensaje", "sintoma").execute()
+        
+        if not res.data or len(res.data) == 0:
+            return "Sin síntomas registrados"
+        
+        # Obtener el síntoma principal (normalmente la primera respuesta)
+        sintoma_principal = ""
+        for item in res.data:
+            if "síntomas" in item.get("pregunta", "").lower() or "síntoma" in item.get("pregunta", "").lower() or "symptoms" in item.get("pregunta", "").lower():
+                sintoma_principal = item.get("respuesta_usuario", "")
+                break
+        
+        if sintoma_principal:
+            # Limitar a 40 caracteres y añadir ... si es más largo
+            if len(sintoma_principal) > 40:
+                return sintoma_principal[:40] + "..."
+            return sintoma_principal
+        else:
+            return "Consulta previa"
+            
+    except Exception as e:
+        print(f"Error al obtener resumen de síntomas: {str(e)}")
+        return "Consulta previa"
+
+# Función para crear sesión
+def crear_sesion(usuario_id):
+    res = supabase.table("sesiones").insert({
+        "usuario_id": usuario_id,
+        "fecha_inicio": datetime.now().isoformat(),
+        "estado": "activa"
+    }).execute()
+    return res.data[0]["id"]
+
+# ---------------------------------------------------------------------------------------------------------------------------------
 
 def obtener_respuesta(idioma, clave, **kwargs):
     if idioma in translations:
@@ -22,185 +118,137 @@ def obtener_respuesta(idioma, clave, **kwargs):
         return "Sorry, I can't detect your language."
 
 
-
-load_dotenv()  # Carga las variables del archivo .env
-
-def save_interaction_data(data):
-    try:
-        # Verificar que tenemos datos mínimos necesarios
-        required_fields = ['user_id', 'chat_id', 'start_time']
-        for field in required_fields:
-            if field not in data:
-                print(f"Error: Falta el campo obligatorio '{field}' en los datos de interacción")
-                return False
-        
-        # Convertir objetos datetime a formato ISO si es necesario
-        if isinstance(data.get('start_time'), datetime):
-            data['start_time'] = data['start_time'].isoformat()
-            
-        if isinstance(data.get('end_time'), datetime):
-            data['end_time'] = data['end_time'].isoformat()
-            
-        # Conectar a Snowflake
-        conn = snowflake.connector.connect(
-            user=os.getenv('SNOWFLAKE_USER'),
-            password=os.getenv('SNOWFLAKE_PASSWORD'),
-            account=os.getenv('SNOWFLAKE_ACCOUNT'),
-            warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
-            database=os.getenv('SNOWFLAKE_DATABASE'),
-            schema=os.getenv('SNOWFLAKE_SCHEMA')
-        )
-        cursor = conn.cursor()
-        query = """
-            INSERT INTO bot_interactions (
-                user_id, chat_id, interaction_start, interaction_end, 
-                symptoms_reported, diagnosis_provided, confirmation_status, 
-                satisfaction_status, messages_exchanged, session_duration_seconds, 
-                inactivity_flag, error_details, user_feedback, user_rating
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-        """
-
-        # Log de datos a guardar
-        print(f"Guardando datos en Snowflake para usuario {data['user_id']}:")
-        print(f"- Inicio: {data['start_time']}")
-        print(f"- Fin: {data.get('end_time', None)}")
-        print(f"- Mensajes intercambiados: {data.get('messages_exchanged', 0)}")
-        
-        cursor.execute(query, (
-            data['user_id'], data['chat_id'], 
-            data['start_time'], data.get('end_time', None), 
-            data.get('symptoms_reported', None), data.get('diagnosis_provided', None),
-            data.get('confirmation_status', None), data.get('satisfaction_status', None),
-            data.get('messages_exchanged', 0), data.get('session_duration_seconds', 0),
-            data.get('inactivity_flag', False), data.get('error_details', None),
-            data.get('user_feedback', None), data.get('user_rating', None)
-        ))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print(f"✅ Datos guardados correctamente en Snowflake para usuario {data['user_id']}")
-        return True
-    except snowflake.connector.errors.ProgrammingError as e:
-        error_code = e.errno
-        error_msg = str(e)
-        print(f"Error de Snowflake (código {error_code}): {error_msg}")
-        
-        # Guardar el error en un archivo log
-        with open("snowflake_errors.log", "a") as log_file:
-            log_file.write(f"[{datetime.now().isoformat()}] Error {error_code}: {error_msg}\n")
-            log_file.write(f"Datos: {str(data)}\n\n")
-        
-        return False
-    except Exception as e:
-        print(f"Error general al guardar datos en Snowflake: {e}")
-        
-        # Guardar el error en un archivo log
-        with open("snowflake_errors.log", "a") as log_file:
-            log_file.write(f"[{datetime.now().isoformat()}] Error general: {str(e)}\n")
-            log_file.write(f"Datos: {str(data)}\n\n")
-        
-        return False
-
-# Conexión con Snowflake
 def get_diagnosis(sintomas, idioma):
     try:
-        # Verificar si sintomas es un diccionario/objeto JSON
+        # Si sintomas es un diccionario, convertir a texto
         if isinstance(sintomas, dict):
-            sintomas_texto = ""
-            for clave, valor in sintomas.items():
-                sintomas_texto += f"{clave}: {valor}, "
-            sintomas = sintomas_texto.rstrip(", ")  # Eliminar la última coma y espacio
-        
-        conn = snowflake.connector.connect(
-            user=os.getenv('SNOWFLAKE_USER'),
-            password=os.getenv('SNOWFLAKE_PASSWORD'),
-            account=os.getenv('SNOWFLAKE_ACCOUNT'),
-            warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
-            database=os.getenv('SNOWFLAKE_DATABASE'),
-            schema=os.getenv('SNOWFLAKE_SCHEMA')
-        )
-        cursor = conn.cursor()
+            sintomas = ", ".join(f"{k}: {v}" for k, v in sintomas.items())
 
-        prompt = f"El usuario reporta los siguientes síntomas: {sintomas}. Devuelve: 1. Posibles diagnósticos preliminares. 2. Tratamientos caseros. 3. Cuándo debe buscar atención médica. LO NECESITO EN TEXO PLANO"
+        # Prompt único, dependiendo del idioma
         if idioma == 'en':
-            prompt = f"The user reports the following symptoms: {sintomas}. Return: 1. Possible preliminary diagnoses. 2. Home treatments. 3. When to seek medical attention. I need in plain text."
-        
-        print(f"Prompt enviado a Snowflake: {prompt}")
-        
-        # Usar exactamente el formato que el usuario indicó
-        query = f"""
-            SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                'mistral-large2',
-                [{{'role':'user','content':'{prompt.replace("'", "''")}'}}],
-                {{ }}
-            );
-        """
-        
-        print(f"Query SQL: {query}")
-        cursor.execute(query)
-        result = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        
-        # Procesar la respuesta para extraer solo el texto
-        if result and result[0]:
-            # La respuesta viene en formato JSON
-            try:
-                respuesta_json = json.loads(result[0])
-                # Extraer solo el mensaje de texto de la respuesta JSON
-                if "choices" in respuesta_json and respuesta_json["choices"] and "messages" in respuesta_json["choices"][0]:
-                    return respuesta_json["choices"][0]["messages"].strip()
-                else:
-                    return result[0]  # Devolver el resultado completo si no podemos extraer el mensaje
-            except json.JSONDecodeError:
-                # Si no es JSON válido, devolver el resultado tal cual
-                return result[0]
+            prompt = (
+                f"The user reports the following symptoms: {sintomas}. "
+                "Return:\n1. Possible preliminary diagnoses.\n"
+                "2. Home treatments.\n"
+                "3. When to seek medical attention.\n"
+                "Respond in plain English."
+            )
         else:
-            return "No se encontró un diagnóstico para estos síntomas."
+            prompt = (
+                f"El usuario reporta los siguientes síntomas: {sintomas}. "
+                "Devuelve:\n1. Posibles diagnósticos preliminares.\n"
+                "2. Tratamientos caseros.\n"
+                "3. Cuándo debe buscar atención médica.\n"
+                "Responde en texto plano."
+            )
+
+        # Consulta a OpenAI en un solo mensaje
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # más económico que gpt-4o
+            messages=[
+                {"role": "system", "content": "You are a virtual doctor providing preliminary diagnoses based on reported symptoms."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        # Extraer respuesta
+        return response.choices[0].message.content.strip()
+
     except Exception as e:
-        print(f"Error completo en get_diagnosis: {str(e)}")
-        return f"Error al obtener diagnóstico: {str(e)}"
+        print(f"Error en get_diagnosis: {str(e)}")
+        return "Hubo un error al obtener el diagnóstico. Intenta nuevamente más tarde."
+
 
 # Función para el comando /start o mensajes de saludo
-async def start(update: Update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = update.effective_user.id
         user_name = update.effective_user.username or "Desconocido"
         chat_id = update.effective_chat.id
         timestamp = update.message.date
+
+        # Guardar usuario en Supabase y obtener su id
+        usuario_id = registrar_usuario(chat_id, user_name)
         
-        # Guardar datos básicos del usuario
-        interaction_data[user_id] = {
-            'user_id': user_id,
-            'user_name': user_name,
-            'chat_id': chat_id,
-            'start_time': timestamp,
-            'messages_exchanged': 1,  # Inicializar contador de mensajes
-            'confirmation_status': None,
-            'satisfaction_status': None,
-            'inactivity_flag': False
-        }
-      
-        # Registrar el tiempo de inicio de la sesión
-        user_data[user_id] = {'sintomas': [], 'start_time': datetime.now()}
+        # Verificar si el usuario tiene sesiones previas
+        sesiones_previas = verificar_sesiones_previas(usuario_id)
+        
+        # Si tiene sesiones previas, preguntar si quiere ver historial o iniciar nueva consulta
+        if sesiones_previas:
+            # Guardar datos básicos del usuario en memoria
+            interaction_data[user_id] = {
+                'user_id': user_id,
+                'user_name': user_name,
+                'chat_id': chat_id,
+                'start_time': timestamp,
+                'messages_exchanged': 1,
+                'confirmation_status': None,
+                'satisfaction_status': None,
+                'inactivity_flag': False,
+                'usuario_id': usuario_id,  # ID en la base de datos
+                'sesiones_previas': sesiones_previas
+            }
+            
+            # Mostrar opciones de idioma primero
+            keyboard = [
+                [InlineKeyboardButton("Español", callback_data="lang_es")],
+                [InlineKeyboardButton("English", callback_data="lang_en")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "Please select your language / Por favor, selecciona tu idioma:",
+                reply_markup=reply_markup
+            )
+            
+            # Marcar que el usuario está en el flujo de sesiones previas
+            user_data[user_id] = {
+                'start_time': datetime.now(),
+                'tiene_historial': True
+            }
+            
+            print(f"[INICIO] Usuario registrado: UsuarioID={usuario_id}, TelegramID={user_id}, Usuario={user_name}, Sesiones previas: {len(sesiones_previas)}")
+            
+        else:
+            # Si no tiene sesiones previas, crear una nueva sesión directamente
+            sesion_id = crear_sesion(usuario_id)
+            
+            # Guardar en memoria para seguimiento en la conversación
+            interaction_data[user_id] = {
+                'user_id': user_id,
+                'user_name': user_name,
+                'chat_id': chat_id,
+                'start_time': timestamp,
+                'messages_exchanged': 1,
+                'confirmation_status': None,
+                'satisfaction_status': None,
+                'inactivity_flag': False,
+                'sesion_id': sesion_id,
+                'usuario_id': usuario_id
+            }
+            user_data[user_id] = {'sintomas': [], 'start_time': datetime.now(), 'tiene_historial': False}
 
-        # Mostrar los datos básicos del usuario en consola
-        print(f"[INICIO] ID={user_id}, Usuario={user_name}, Chat={chat_id}, Timestamp={timestamp}")
+            # Log en consola
+            print(f"[INICIO] Nuevo usuario: UsuarioID={usuario_id}, SesionID={sesion_id}, TelegramID={user_id}, Usuario={user_name}")
 
-        # Mostrar opciones de idioma
-        keyboard = [
-            [InlineKeyboardButton("Español", callback_data="lang_es")],
-            [InlineKeyboardButton("English", callback_data="lang_en")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Please select your language / Por favor, selecciona tu idioma:", reply_markup=reply_markup)
+            # Mostrar opciones de idioma
+            keyboard = [
+                [InlineKeyboardButton("Español", callback_data="lang_es")],
+                [InlineKeyboardButton("English", callback_data="lang_en")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "Please select your language / Por favor, selecciona tu idioma:",
+                reply_markup=reply_markup
+            )
+
     except Exception as e:
         print(f"Error al iniciar la conversación: {str(e)}")
         error_details = str(e)
         if user_id in interaction_data:
             interaction_data[user_id]['error_details'] = error_details
         await update.message.reply_text("An error occurred while starting the conversation. Please try again.")
+
+    
 
 # Función para manejar la selección de idioma
 async def set_language(update: Update, context):
@@ -214,8 +262,51 @@ async def set_language(update: Update, context):
     else:
         idioma = 'en'
 
+    # Guardar el idioma seleccionado
+    if user_id not in user_data:
+        user_data[user_id] = {}
     user_data[user_id]['idioma'] = idioma
 
+    # Si el usuario tiene historial, preguntarle si quiere consultar historial o nueva consulta
+    if user_data[user_id].get('tiene_historial', False) and user_id in interaction_data:
+        sesiones_previas = interaction_data[user_id].get('sesiones_previas', [])
+        if sesiones_previas:
+            # Crear opciones con las fechas de las sesiones anteriores
+            keyboard = []
+            for i, sesion in enumerate(sesiones_previas):
+                # Obtener resumen de síntomas para esta sesión
+                resumen = obtener_resumen_sintomas(sesion['id'])
+                
+                keyboard.append([InlineKeyboardButton(
+                    f"Consulta: {resumen}" if idioma == 'es' else f"Session: {resumen}", 
+                    callback_data=f"historial_{sesion['id']}"
+                )])
+            
+            # Añadir opción de nueva consulta
+            keyboard.append([InlineKeyboardButton(
+                "🆕 Nueva consulta" if idioma == 'es' else "🆕 New consultation",
+                callback_data="nueva_consulta"
+            )])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Mostrar mensaje según el idioma
+            mensaje = "Detectamos consultas previas. ¿Deseas ver alguna de estas o iniciar una nueva?" if idioma == 'es' else \
+                      "We detected previous consultations. Would you like to see one of these or start a new one?"
+            
+            await query.message.reply_text(mensaje, reply_markup=reply_markup)
+            return
+    
+    # Si no tiene historial o se está iniciando una nueva consulta directamente
+    usuario_id = interaction_data[user_id].get('usuario_id')
+    if 'sesion_id' not in interaction_data[user_id]:
+        # Crear una nueva sesión
+        sesion_id = crear_sesion(usuario_id)
+        interaction_data[user_id]['sesion_id'] = sesion_id
+        if 'sintomas' not in user_data[user_id]:
+            user_data[user_id]['sintomas'] = []
+    
+    # Mensaje de bienvenida y flujo normal
     await query.message.reply_text(obtener_respuesta(idioma, 'bienvenida'))
     await query.message.reply_text(obtener_respuesta(idioma, 'introduccion', user_name=query.from_user.username))
 
@@ -223,22 +314,45 @@ async def set_language(update: Update, context):
 async def reset_after_inactivity(user_id, context):
     try:
         await asyncio.sleep(1800)  # Esperar 30 minutos
+
         if user_id in user_data:
-            # Registrar inactividad antes de eliminar los datos
+            sesion_id = interaction_data[user_id].get("sesion_id")
+
+            if sesion_id:
+                # Guardar cierre en BD
+                supabase.table("sesiones").update({
+                    "fecha_fin": datetime.now().isoformat(),
+                    "estado": "finalizada"
+                }).eq("id", sesion_id).execute()
+
+            # Registrar inactividad antes de eliminar datos
             if user_id in interaction_data:
                 interaction_data[user_id]['inactivity_flag'] = True
                 interaction_data[user_id]['end_time'] = datetime.now()
-                # Guardar en base de datos los datos del usuario inactivo
-                save_interaction_data(interaction_data[user_id])
-                print(f"[INACTIVIDAD] Usuario {user_id} - Datos guardados por inactividad")
-            
+                print(f"[INACTIVIDAD] Usuario {user_id} - Sesión {sesion_id} cerrada por inactividad")
+
+            # Limpiar datos en memoria
             user_data.pop(user_id, None)
-            interaction_data.pop(user_id, None)  # Eliminar datos de interacción después de guardarlos
+            interaction_data.pop(user_id, None)
+
+            # Avisar al usuario
             await context.bot.send_message(chat_id=user_id, text=obtener_respuesta('es', 'inactividad'))
+
     except Exception as e:
         print(f"Error en la función de inactividad: {str(e)}")
         if user_id in interaction_data:
             interaction_data[user_id]['error_details'] = str(e)
+
+
+
+def guardar_respuestas_sintomas(sesion_id, sintomas_info):
+    for pregunta, respuesta in sintomas_info.items():
+        supabase.table("consultas").insert({
+            "sesion_id": sesion_id,
+            "tipo_mensaje": "pregunta_sintomas",
+            "pregunta": pregunta,
+            "respuesta_usuario": respuesta
+        }).execute()            
 
 # Función para manejar mensajes de texto
 async def handle_message(update: Update, context):
@@ -258,10 +372,21 @@ async def handle_message(update: Update, context):
         # Verificar si estamos esperando una sugerencia
         if user_data[user_id].get('esperando_sugerencia', False):
             idioma = user_data[user_id]['idioma']
+            sesion_id = interaction_data[user_id].get("sesion_id")
             
             # Guardar la sugerencia en interaction_data
             interaction_data[user_id]['user_feedback'] = user_response
             print(f"[FEEDBACK] Usuario {user_id} envió: {user_response}")
+            
+            # Guardar el feedback en la tabla sesiones
+            if sesion_id:
+                try:
+                    supabase.table("sesiones").update({
+                        "feedback_usuario": user_response
+                    }).eq("id", sesion_id).execute()
+                    print(f"[BD] Feedback guardado para sesión {sesion_id}")
+                except Exception as e:
+                    print(f"Error al guardar feedback en BD: {str(e)}")
             
             # Agregar campo de calificación
             keyboard = [
@@ -408,196 +533,6 @@ async def handle_message(update: Update, context):
             interaction_data[user_id]['error_details'] = str(e)
         await update.message.reply_text(obtener_respuesta('es', 'error_mensaje'))
 
-async def handle_confirmation(update: Update, context):
-    try:
-        query = update.callback_query
-        user_id = query.from_user.id
-        user_choice = query.data  # Esto contendrá 'confirm_yes' o 'confirm_no'
-
-        # Verificar si 'start_time' está presente antes de acceder a él
-        if user_id not in user_data or 'start_time' not in user_data[user_id]:
-            await query.message.reply_text("Parece que la sesión ha expirado. Usa /start para reiniciar.")
-            return
-
-        idioma = user_data[user_id]['idioma']
-        sintomas_info = user_data[user_id].get('sintomas_info', {})
-
-        # Registrar la confirmación del usuario
-        interaction_data[user_id]['confirmation_status'] = "Sí" if user_choice == "confirm_yes" else "No"
-        
-        # Procesar y guardar los síntomas
-        sintomas_texto = ""
-        for clave, valor in sintomas_info.items():
-            sintomas_texto += f"{clave}: {valor}, "
-        sintomas_texto = sintomas_texto.rstrip(", ")  # Eliminar la última coma y espacio
-        
-        # Guardar los síntomas en un formato estructurado para la base de datos
-        interaction_data[user_id]['symptoms_reported'] = sintomas_texto
-        
-        # Imprimir la elección del usuario en la consola
-        if user_choice == "confirm_no":
-            print(f"Usuario {user_id} eligió NO")
-            
-            # Crear teclado con las opciones de preguntas para corregir
-            keyboard = []
-            preguntas = [
-                obtener_respuesta(idioma, 'descripcion_sintomas'),
-                obtener_respuesta(idioma, 'duracion_sintomas'),
-                obtener_respuesta(idioma, 'intensidad_sintomas'),
-                obtener_respuesta(idioma, 'frecuencia_sintomas'),
-                obtener_respuesta(idioma, 'cambios_sintomas'),
-                obtener_respuesta(idioma, 'datos_relevantes'),
-                obtener_respuesta(idioma, 'antecedentes_medicos'),
-                obtener_respuesta(idioma, 'enfermedades_cronicas'),
-                obtener_respuesta(idioma, 'alergias'),
-                obtener_respuesta(idioma, 'edad'),
-                obtener_respuesta(idioma, 'sexo'),
-                obtener_respuesta(idioma, 'peso'),
-                obtener_respuesta(idioma, 'altura')
-            ]
-            
-            # Guardar la lista de preguntas para referencia futura
-            user_data[user_id]['preguntas'] = preguntas
-            
-            # Crear botones para cada pregunta
-            for i, pregunta in enumerate(preguntas):
-                # Limitar el texto a 60 caracteres para que quepa en los botones
-                texto_boton = pregunta[:60] + ('...' if len(pregunta) > 60 else '')
-                keyboard.append([InlineKeyboardButton(f"{i+1}. {texto_boton}", callback_data=f"corregir_{i}")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.message.reply_text(
-                obtener_respuesta(idioma, 'seleccionar_correccion') 
-                if idioma == 'es' else 
-                "Please select which answer you want to correct:",
-                reply_markup=reply_markup
-            )
-            return
-
-        # Calcular la duración de la sesión
-        start_time = user_data[user_id]['start_time']
-        end_time = datetime.now()
-        session_duration = (end_time - start_time).total_seconds()  # En segundos
-
-        # Registrar la duración de la sesión
-        interaction_data[user_id]['session_duration_seconds'] = session_duration
-        interaction_data[user_id]['end_time'] = end_time
-        print(f"[FIN] Usuario {user_id} - Duración de la sesión: {session_duration} segundos")
-
-        # Informar al usuario que el diagnóstico está en proceso
-        espera_msg = obtener_respuesta(idioma, 'diagnostico_proceso')
-        await query.message.reply_text(f"⏳ {espera_msg}")
-
-        # Obtener el diagnóstico
-        diagnostico = get_diagnosis(sintomas_texto, idioma)
-        print(f"Diagnóstico: {diagnostico}")
-        
-        # Almacenar el diagnóstico en interaction_data para la base de datos
-        interaction_data[user_id]['diagnosis_provided'] = diagnostico
-
-        # Formatear la respuesta para Telegram
-        if idioma == 'es':
-            mensaje_diagnostico = "<b>🏥 RESULTADO DEL ANÁLISIS MÉDICO 🏥</b>\n\n"
-        else:
-            mensaje_diagnostico = "<b>🏥 MEDICAL ANALYSIS RESULT 🏥</b>\n\n"
-            
-        # Formatear la respuesta de la IA para que se vea bien en Telegram
-        lineas_diagnostico = diagnostico.split('\n')
-        diagnostico_formateado = ""
-        
-        for linea in lineas_diagnostico:
-            if "1." in linea or linea.startswith("1 "):
-                if idioma == 'es':
-                    diagnostico_formateado += "<b>🔍 DIAGNÓSTICOS POSIBLES:</b>\n"
-                else:
-                    diagnostico_formateado += "<b>🔍 POSSIBLE DIAGNOSES:</b>\n"
-                # Eliminar el "1." del principio si existe
-                if "1." in linea:
-                    linea = linea.split("1.", 1)[1].strip()
-                elif linea.startswith("1 "):
-                    linea = linea[2:].strip()
-                diagnostico_formateado += f"• {linea}\n"
-            elif "2." in linea or linea.startswith("2 "):
-                diagnostico_formateado += "\n"
-                if idioma == 'es':
-                    diagnostico_formateado += "<b>🏠 TRATAMIENTOS CASEROS:</b>\n"
-                else:
-                    diagnostico_formateado += "<b>🏠 HOME TREATMENTS:</b>\n"
-                # Eliminar el "2." del principio si existe
-                if "2." in linea:
-                    linea = linea.split("2.", 1)[1].strip()
-                elif linea.startswith("2 "):
-                    linea = linea[2:].strip()
-                diagnostico_formateado += f"• {linea}\n"
-            elif "3." in linea or linea.startswith("3 "):
-                diagnostico_formateado += "\n"
-                if idioma == 'es':
-                    diagnostico_formateado += "<b>🚨 CUÁNDO BUSCAR ATENCIÓN MÉDICA:</b>\n"
-                else:
-                    diagnostico_formateado += "<b>🚨 WHEN TO SEEK MEDICAL ATTENTION:</b>\n"
-                # Eliminar el "3." del principio si existe
-                if "3." in linea:
-                    linea = linea.split("3.", 1)[1].strip()
-                elif linea.startswith("3 "):
-                    linea = linea[2:].strip()
-                diagnostico_formateado += f"• {linea}\n"
-            else:
-                # Para otras líneas, verificamos si pertenecen a una sección y las formateamos con viñetas
-                if diagnostico_formateado and not linea.strip() == "":
-                    diagnostico_formateado += f"• {linea}\n"
-        
-        # Añadir disclaimer médico
-        if idioma == 'es':
-            disclaimer = "\n<i>⚠️ NOTA IMPORTANTE: Este análisis es sólo informativo y no reemplaza la consulta con un profesional médico. Siempre consulte a un médico para un diagnóstico oficial.</i>"
-        else:
-            disclaimer = "\n<i>⚠️ IMPORTANT NOTE: This analysis is for informational purposes only and does not replace consultation with a healthcare professional. Always consult a doctor for an official diagnosis.</i>"
-        
-        # Añadir separadores decorativos
-        separador = "\n🔸🔹🔸🔹🔸🔹🔸🔹🔸🔹🔸🔹🔸🔹🔸\n"
-        mensaje_final = mensaje_diagnostico + separador + diagnostico_formateado + separador + disclaimer
-        
-        # Enviar el diagnóstico al usuario con formato HTML
-        await query.message.reply_text(mensaje_final, parse_mode="HTML")
-
-        # Preguntar si está satisfecho
-        if idioma == 'es':
-            pregunta_satisfaccion = "¿Te ha sido útil este diagnóstico? 🤔"
-        else:
-            pregunta_satisfaccion = "Was this diagnosis helpful? 🤔"
-            
-        keyboard = [
-            [InlineKeyboardButton(f"✅ {obtener_respuesta(idioma, 'confirm_yes')}", callback_data="satisfied_yes")],
-            [InlineKeyboardButton(f"❌ {obtener_respuesta(idioma, 'confirm_no')}", callback_data="satisfied_no")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text(pregunta_satisfaccion, reply_markup=reply_markup)
-    except Exception as e:
-        print(f"Error al manejar la confirmación del usuario: {str(e)}")
-        await query.message.reply_text(obtener_respuesta('es', 'error_confirmacion'))
-
-# Manejar satisfacción del usuario
-async def handle_satisfaction(update: Update, context):
-    try:
-        query = update.callback_query
-        user_id = query.from_user.id
-
-        idioma = user_data[user_id]['idioma']
-
-        if query.data == "satisfied_yes":
-            interaction_data[user_id]['satisfaction_status'] = "Sí"
-            await query.message.reply_text(obtener_respuesta(idioma, 'gracias'))
-        elif query.data == "satisfied_no":
-            interaction_data[user_id]['satisfaction_status'] = "No"
-            await query.message.reply_text(obtener_respuesta(idioma, 'disculpa'))
-
-        # Solicitar sugerencias
-        user_data[user_id]['esperando_sugerencia'] = True
-        await query.message.reply_text(obtener_respuesta(idioma, 'buzon'))
-        
-    except Exception as e:
-        print(f"Error al manejar la satisfacción del usuario: {str(e)}")
-        await query.message.reply_text(obtener_respuesta(idioma, 'error_satisfaccion'))
-
 # Nueva función para manejar las correcciones
 async def handle_correction(update: Update, context):
     try:
@@ -651,64 +586,239 @@ async def handle_correction(update: Update, context):
             )
     except Exception as e:
         print(f"Error al manejar la corrección: {str(e)}")
-        await query.message.reply_text("Error al procesar tu solicitud de corrección.")
+        await query.message.reply_text("Error al procesar tu solicitud de corrección.")        
 
-# Nueva función para manejar las calificaciones
-async def handle_rating(update: Update, context):
+async def handle_confirmation(update: Update, context):
+    try:
+        query = update.callback_query
+        user_id = query.from_user.id
+        user_choice = query.data  # 'confirm_yes' o 'confirm_no'
+
+        if user_id not in user_data or 'start_time' not in user_data[user_id]:
+            await query.message.reply_text("Parece que la sesión ha expirado. Usa /start para reiniciar.")
+            return
+
+        idioma = user_data[user_id]['idioma']
+        sintomas_info = user_data[user_id].get('sintomas_info', {})
+        sesion_id = interaction_data[user_id].get("sesion_id")
+
+        # Guardar estado de confirmación
+        interaction_data[user_id]['confirmation_status'] = "Sí" if user_choice == "confirm_yes" else "No"
+
+        # Usuario elige NO → flujo de corrección
+        if user_choice == "confirm_no":
+            preguntas = [
+                obtener_respuesta(idioma, 'descripcion_sintomas'),
+                obtener_respuesta(idioma, 'duracion_sintomas'),
+                obtener_respuesta(idioma, 'intensidad_sintomas'),
+                obtener_respuesta(idioma, 'frecuencia_sintomas'),
+                obtener_respuesta(idioma, 'cambios_sintomas'),
+                obtener_respuesta(idioma, 'datos_relevantes'),
+                obtener_respuesta(idioma, 'antecedentes_medicos'),
+                obtener_respuesta(idioma, 'enfermedades_cronicas'),
+                obtener_respuesta(idioma, 'alergias'),
+                obtener_respuesta(idioma, 'edad'),
+                obtener_respuesta(idioma, 'sexo'),
+                obtener_respuesta(idioma, 'peso'),
+                obtener_respuesta(idioma, 'altura')
+            ]
+            user_data[user_id]['preguntas'] = preguntas
+            keyboard = []
+            for i, pregunta in enumerate(preguntas):
+                texto_boton = pregunta[:60] + ('...' if len(pregunta) > 60 else '')
+                keyboard.append([InlineKeyboardButton(f"{i+1}. {texto_boton}", callback_data=f"corregir_{i}")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.reply_text(
+                obtener_respuesta(idioma, 'seleccionar_correccion'),
+                reply_markup=reply_markup
+            )
+            return
+
+        # Usuario elige SÍ → Guardar en Supabase
+        guardar_respuestas_sintomas(sesion_id, sintomas_info)
+
+        print(f"[BD] {len(sintomas_info)} respuestas guardadas para sesión {sesion_id}")
+
+        # Mensaje de espera
+        espera_msg = obtener_respuesta(idioma, 'diagnostico_proceso')
+        await query.message.reply_text(f"⏳ {espera_msg}")
+
+        # Generar diagnóstico con ChatGPT
+        sintomas_texto = "\n".join([f"{k}: {v}" for k, v in sintomas_info.items()])
+        diagnostico = get_diagnosis(sintomas_texto, idioma)
+        interaction_data[user_id]['diagnosis_provided'] = diagnostico
+
+        # Guardar diagnóstico en la BD
+        supabase.table("consultas").insert({
+            "sesion_id": sesion_id,
+            "tipo_mensaje": "diagnostico",
+            "pregunta": "Diagnóstico generado",
+            "respuesta_bot": diagnostico
+        }).execute()
+
+        print(f"[BD] Diagnóstico guardado para sesión {sesion_id}")
+
+        # Enviar diagnóstico al usuario (con formato)
+        mensaje_diagnostico = "<b>🏥 RESULTADO DEL ANÁLISIS MÉDICO 🏥</b>\n\n" if idioma == 'es' else "<b>🏥 MEDICAL ANALYSIS RESULT 🏥</b>\n\n"
+        mensaje_final = mensaje_diagnostico + diagnostico + "\n\n<i>⚠️ Este análisis es informativo y no reemplaza consulta médica.</i>"
+        await query.message.reply_text(mensaje_final, parse_mode="HTML")
+
+        # Preguntar satisfacción
+        keyboard = [
+            [InlineKeyboardButton(f"✅ {obtener_respuesta(idioma, 'satisfied_yes')}", callback_data="satisfied_yes")],
+            [InlineKeyboardButton(f"❌ {obtener_respuesta(idioma, 'satisfied_no')}", callback_data="satisfied_no")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(
+            "¿Te ha sido útil este diagnóstico? 🤔" if idioma == 'es' else "Was this diagnosis helpful? 🤔",
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+        print(f"Error en handle_confirmation: {e}")
+        await query.message.reply_text(obtener_respuesta('es', 'error_confirmacion'))
+
+# Manejar satisfacción del usuario
+async def handle_satisfaction(update: Update, context):
+    try:
+        query = update.callback_query
+        user_id = query.from_user.id
+        idioma = user_data[user_id]['idioma']
+        sesion_id = interaction_data[user_id].get("sesion_id")
+
+        if query.data == "satisfied_yes":
+            interaction_data[user_id]['satisfaccion'] = True
+            await query.message.reply_text(obtener_respuesta(idioma, 'gracias'))
+        elif query.data == "satisfied_no":
+            interaction_data[user_id]['satisfaccion'] = False
+            await query.message.reply_text(obtener_respuesta(idioma, 'disculpa'))
+
+        # Guardar en la BD
+        supabase.table("sesiones").update({
+            "satisfaccion": interaction_data[user_id]['satisfaccion']
+        }).eq("id", sesion_id).execute()
+
+        # Pedir feedback
+        user_data[user_id]['esperando_sugerencia'] = True
+        await query.message.reply_text(obtener_respuesta(idioma, 'buzon'))
+
+    except Exception as e:
+        print(f"Error al manejar la satisfacción del usuario: {str(e)}")
+        await query.message.reply_text(obtener_respuesta(idioma, 'error_satisfaccion'))
+
+
+# (Eliminado) handle_feedback: la lógica de feedback ya se gestiona en handle_message cuando 'esperando_sugerencia' es True.
+
+# Función para manejar la selección de historial o nueva consulta
+async def handle_historial(update: Update, context):
     try:
         query = update.callback_query
         user_id = query.from_user.id
         callback_data = query.data
         
-        idioma = user_data[user_id]['idioma']
+        if user_id not in user_data:
+            await query.message.reply_text("Parece que la sesión ha expirado. Usa /start para reiniciar.")
+            return
         
-        # Extraer la calificación del callback_data (rating_1, rating_2, etc.)
-        rating = int(callback_data.split('_')[1])
+        idioma = user_data[user_id].get('idioma', 'es')
         
-        # Guardar la calificación en interaction_data
-        interaction_data[user_id]['user_rating'] = rating
-        print(f"[RATING] Usuario {user_id} calificó con {rating} estrellas")
-        
-        # Verificar si hay datos completos para guardar
-        if 'symptoms_reported' not in interaction_data[user_id]:
-            # Si los síntomas no están en formato texto, procesarlos
-            if user_id in user_data and 'sintomas_info' in user_data[user_id]:
-                sintomas_info = user_data[user_id]['sintomas_info']
-                sintomas_texto = ""
-                for clave, valor in sintomas_info.items():
-                    sintomas_texto += f"{clave}: {valor}, "
-                sintomas_texto = sintomas_texto.rstrip(", ")
-                interaction_data[user_id]['symptoms_reported'] = sintomas_texto
-        
-        # Verificar que todos los campos necesarios estén presentes
-        if 'end_time' not in interaction_data[user_id]:
-            interaction_data[user_id]['end_time'] = datetime.now()
+        # Si el usuario elige iniciar nueva consulta
+        if callback_data == "nueva_consulta":
+            # Crear nueva sesión
+            usuario_id = interaction_data[user_id].get('usuario_id')
+            sesion_id = crear_sesion(usuario_id)
             
-        if 'session_duration_seconds' not in interaction_data[user_id] and 'start_time' in interaction_data[user_id]:
-            start_time = interaction_data[user_id]['start_time']
-            end_time = interaction_data[user_id]['end_time']
-            session_duration = (end_time - start_time).total_seconds()
-            interaction_data[user_id]['session_duration_seconds'] = session_duration
+            # Actualizar datos
+            interaction_data[user_id]['sesion_id'] = sesion_id
+            user_data[user_id]['sintomas'] = []
+            user_data[user_id]['tiene_historial'] = False
+            
+            # Mostrar mensaje de bienvenida e introducción
+            await query.message.reply_text(obtener_respuesta(idioma, 'bienvenida'))
+            await query.message.reply_text(obtener_respuesta(idioma, 'introduccion', user_name=query.from_user.username))
+            
+            return
         
-        # Agradecer al usuario por su calificación
+        # Si el usuario elige ver historial
+        if callback_data.startswith("historial_"):
+            sesion_id = int(callback_data.split('_')[1])
+            
+            # Obtener diagnóstico de esa sesión
+            diagnostico = obtener_diagnostico_sesion(sesion_id)
+            
+            if diagnostico:
+                # Formatear y mostrar el diagnóstico guardado
+                mensaje_diagnostico = "<b>🏥 HISTORIAL: DIAGNÓSTICO ANTERIOR 🏥</b>\n\n" if idioma == 'es' else "<b>🏥 HISTORY: PREVIOUS DIAGNOSIS 🏥</b>\n\n"
+                mensaje_final = mensaje_diagnostico + diagnostico + "\n\n<i>⚠️ Este es un diagnóstico de una consulta anterior. Para una nueva consulta, usa /start.</i>"
+                await query.message.reply_text(mensaje_final, parse_mode="HTML")
+                
+                # Ofrecer la opción de iniciar nueva consulta
+                keyboard = [
+                    [InlineKeyboardButton(
+                        "🆕 Iniciar nueva consulta" if idioma == 'es' else "🆕 Start new consultation",
+                        callback_data="nueva_consulta"
+                    )]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                mensaje = "¿Deseas iniciar una nueva consulta?" if idioma == 'es' else "Would you like to start a new consultation?"
+                await query.message.reply_text(mensaje, reply_markup=reply_markup)
+            else:
+                # Si no se encuentra el diagnóstico
+                mensaje_error = "No pudimos encontrar el diagnóstico de esa sesión. ¿Deseas iniciar una nueva consulta?" if idioma == 'es' else \
+                               "We couldn't find the diagnosis for that session. Would you like to start a new consultation?"
+                
+                keyboard = [
+                    [InlineKeyboardButton(
+                        "🆕 Nueva consulta" if idioma == 'es' else "🆕 New consultation",
+                        callback_data="nueva_consulta"
+                    )]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.message.reply_text(mensaje_error, reply_markup=reply_markup)
+    
+    except Exception as e:
+        print(f"Error al manejar historial: {str(e)}")
+        idioma = user_data.get(user_id, {}).get('idioma', 'es')
+        await query.message.reply_text(obtener_respuesta(idioma, 'error_mensaje'))
+
+# Manejar calificación del usuario y cerrar sesión
+async def handle_rating(update: Update, context):
+    try:
+        query = update.callback_query
+        user_id = query.from_user.id
+        callback_data = query.data
+        idioma = user_data[user_id]['idioma']
+        sesion_id = interaction_data[user_id].get("sesion_id")
+
+        # Extraer calificación
+        rating = int(callback_data.split('_')[1])
+        interaction_data[user_id]['calificacion'] = rating
+        print(f"[RATING] Usuario {user_id} calificó con {rating} estrellas")
+
+        # Calcular tiempo de sesión y marcar como finalizada
+        fecha_fin = datetime.now()
+        interaction_data[user_id]['fecha_fin'] = fecha_fin
+
+        supabase.table("sesiones").update({
+            "calificacion": rating,
+            "fecha_fin": fecha_fin.isoformat(),
+            "estado": "finalizada"
+        }).eq("id", sesion_id).execute()
+
+        # Mensaje de agradecimiento
         await query.message.reply_text(obtener_respuesta(idioma, 'gracias'))
-        
-        # Guardar todos los datos en la base de datos
-        save_interaction_data(interaction_data[user_id])
-        
-        print(f"Datos guardados para el usuario {user_id}: {interaction_data[user_id]}")
-        
-        # Limpiar datos y finalizar la conversación
+
+        # Limpiar datos de memoria
         user_data.pop(user_id, None)
         interaction_data.pop(user_id, None)
-        
+
     except Exception as e:
         print(f"Error al manejar la calificación: {str(e)}")
-        if user_id in interaction_data:
-            interaction_data[user_id]['error_details'] = str(e)
-            # Intentar guardar los datos a pesar del error
-            save_interaction_data(interaction_data[user_id])
         await query.message.reply_text("Error al procesar tu calificación.")
+
+
 
 def main():
     token = os.getenv('TELEGRAM_TOKEN')
@@ -719,6 +829,7 @@ def main():
 # Añadir manejadores
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(set_language, pattern='^(lang_es|lang_en)$'))
+    app.add_handler(CallbackQueryHandler(handle_historial, pattern='^(historial_|nueva_consulta)'))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^(confirm_yes|confirm_no)$'))
     app.add_handler(CallbackQueryHandler(handle_satisfaction, pattern='^(satisfied_yes|satisfied_no)$'))
